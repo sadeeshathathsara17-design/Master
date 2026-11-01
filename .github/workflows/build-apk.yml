@@ -20,6 +20,14 @@ jobs:
             D=$(dirname "$(find app -name package.json -not -path '*/node_modules/*' | head -1)")
             mv "$D"/* app/ 2>/dev/null || true
           fi
+          ICON=$(ls icon*.png 2>/dev/null | head -1)
+          if [ -n "$ICON" ]; then
+            mkdir -p app/resources
+            cp "$ICON" app/resources/icon.png
+            echo "Custom icon used: $ICON"
+          else
+            echo "No custom icon found"
+          fi
           ls app
 
       - name: Setup Node
@@ -49,6 +57,17 @@ jobs:
       - name: Sync web files
         working-directory: app
         run: npx cap sync android
+
+      - name: Use fixed signing key and bump version
+        run: |
+          mkdir -p ~/.android
+          if [ -f debug.keystore ]; then
+            cp debug.keystore ~/.android/debug.keystore
+            echo "Fixed debug.keystore used"
+          else
+            echo "debug.keystore NOT found"
+          fi
+          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/" app/android/app/build.gradle
 
       - name: Build debug APK
         working-directory: app/android
