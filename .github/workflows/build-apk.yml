@@ -15,7 +15,10 @@ jobs:
       - name: Unzip project
         run: |
           mkdir -p app
-          unzip -q project.zip -d app
+          ZIP=$(ls project\ \(*\).zip 2>/dev/null | sort -V | tail -1)
+          if [ -z "$ZIP" ]; then ZIP=project.zip; fi
+          echo "Using: $ZIP"
+          unzip -q "$ZIP" -d app
           if [ ! -f app/package.json ]; then
             D=$(dirname "$(find app -name package.json -not -path '*/node_modules/*' | head -1)")
             mv "$D"/* app/ 2>/dev/null || true
@@ -45,11 +48,47 @@ jobs:
         working-directory: app
         run: npm install
 
+      - name: Speed up app (local libraries, no CDN)
+        working-directory: app
+        continue-on-error: true
+        run: |
+          mkdir -p www/vendor/fa/css www/vendor/fa/webfonts
+          rep() {
+            if curl -fsSL --retry 2 --max-time 90 "$1" -o "www/vendor/$2"; then
+              sed -i "s#<script src=\"$1\"></script>#<script defer src=\"vendor/$2\"></script>#" www/index.html
+              echo "local: $2"
+            else
+              rm -f "www/vendor/$2"; echo "skipped: $2"
+            fi
+          }
+          rep "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" html2pdf.js
+          rep "https://cdn.jsdelivr.net/npm/chart.js" chart.js
+          rep "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" jspdf.js
+          rep "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js" autotable.js
+
+          FA=https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0
+          if curl -fsSL --retry 2 "$FA/css/all.min.css" -o www/vendor/fa/css/all.min.css; then
+            for f in fa-solid-900 fa-regular-400 fa-brands-400 fa-v4compatibility; do
+              curl -fsSL --retry 2 "$FA/webfonts/$f.woff2" -o "www/vendor/fa/webfonts/$f.woff2" || true
+            done
+            sed -i "s#$FA/css/all.min.css#vendor/fa/css/all.min.css#" www/index.html
+            echo "local: font-awesome"
+          fi
+
+          npm install --no-save tailwindcss@3.4.17
+          npx tailwindcss -c tailwind.config.js -i tailwind-in.css -o www/vendor/tailwind.css --minify
+          if [ -s www/vendor/tailwind.css ]; then
+            sed -i 's#<script src="https://cdn.tailwindcss.com"></script>#<link rel="stylesheet" href="vendor/tailwind.css">#' www/index.html
+            echo "local: tailwind"
+          fi
+
+          sed -i "/^[[:space:]]*@import url(['\"]\?https:\/\/fonts.googleapis.com.*;[[:space:]]*$/d" www/index.html || true
+
       - name: Add Android platform
         working-directory: app
         run: npx cap add android
 
-      - name: Generate app icons
+      - name: Generate app icons and splash
         working-directory: app
         run: npx capacitor-assets generate --android
         continue-on-error: true
