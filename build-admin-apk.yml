@@ -1,0 +1,58 @@
+name: Build MasterX Admin APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install packages
+        run: npm install
+
+      # Always create a brand new Android project so the app id is com.masterx.admin
+      - name: Create Android project
+        run: |
+          rm -rf android
+          npx cap add android
+
+      - name: Generate icon and splash
+        run: npx @capacitor/assets generate --android
+
+      - name: Sync web files
+        run: npx cap sync android
+
+      - name: Check app id
+        run: |
+          grep -n "applicationId" android/app/build.gradle
+          grep -q 'com.masterx.admin' android/app/build.gradle
+
+      # Same signing key on every build, so a new APK can update the old one
+      - name: Use fixed signing key
+        run: |
+          mkdir -p ~/.android
+          cp signing/debug.keystore ~/.android/debug.keystore
+
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MasterX-Admin-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
