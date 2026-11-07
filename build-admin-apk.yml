@@ -1,9 +1,10 @@
 name: Build MasterX Admin APK
+run-name: Build MasterX Admin APK
 
+# Manual only. Run it from: Actions > Build MasterX Admin APK > Run workflow.
+# It builds ONLY admin-project.zip (the MasterX Admin app), never the MasterX Study app.
 on:
   workflow_dispatch:
-  push:
-    branches: [main, master]
 
 jobs:
   build:
@@ -20,39 +21,83 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Install packages
-        run: npm install
+      - name: Unpack admin-project.zip
+        run: |
+          rm -rf admin-app && mkdir admin-app
+          unzip -q admin-project.zip -d admin-app
+          CFG=$(find admin-app -name capacitor.config.json -not -path "*/node_modules/*" | head -1)
+          test -n "$CFG"
+          echo "APPDIR=$(dirname "$CFG")" >> "$GITHUB_ENV"
 
-      # Always create a brand new Android project so the app id is com.masterx.admin
+      - name: Set app id and app name
+        run: |
+          cd "$APPDIR"
+          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('capacitor.config.json','utf8'));c.appId='com.masterx.admin';c.appName='MasterX Admin';fs.writeFileSync('capacitor.config.json',JSON.stringify(c,null,2));"
+          cat capacitor.config.json
+
+      - name: Install packages
+        run: |
+          cd "$APPDIR"
+          npm install
+
+      # A brand new Android project every time, so nothing from MasterX Study is reused
       - name: Create Android project
         run: |
+          cd "$APPDIR"
           rm -rf android
           npx cap add android
 
+      - name: Set launcher name
+        run: |
+          cd "$APPDIR"
+          STR=android/app/src/main/res/values/strings.xml
+          sed -i 's#<string name="app_name">[^<]*</string>#<string name="app_name">MasterX Admin</string>#' "$STR"
+          sed -i 's#<string name="title_activity_main">[^<]*</string>#<string name="title_activity_main">MasterX Admin</string>#' "$STR"
+          cat "$STR"
+
       - name: Generate icon and splash
-        run: npx @capacitor/assets generate --android
+        run: |
+          cd "$APPDIR"
+          npx @capacitor/assets generate --android --assetPath resources
 
       - name: Sync web files
-        run: npx cap sync android
-
-      - name: Check app id
         run: |
-          grep -n "applicationId" android/app/build.gradle
-          grep -q 'com.masterx.admin' android/app/build.gradle
+          cd "$APPDIR"
+          npx cap sync android
 
-      # Same signing key on every build, so a new APK can update the old one
+      - name: Check app id and name
+        run: |
+          cd "$APPDIR"
+          grep -n "applicationId" android/app/build.gradle
+          grep -q "com.masterx.admin" android/app/build.gradle
+          grep -q "MasterX Admin" android/app/src/main/res/values/strings.xml
+          if grep -rqi "MasterX Study" android/app/src/main/res/values android/app/build.gradle; then
+            echo "ERROR: MasterX Study name found in the admin project"; exit 1
+          fi
+
+      # The same signing key on every build, so a new APK can update the old one
       - name: Use fixed signing key
         run: |
           mkdir -p ~/.android
-          cp signing/debug.keystore ~/.android/debug.keystore
+          cp "$APPDIR/signing/debug.keystore" ~/.android/debug.keystore
 
       - name: Build APK
         run: |
-          cd android
+          cd "$APPDIR/android"
           chmod +x gradlew
           ./gradlew assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/MasterX-Admin.apk"
+
+      - name: Verify APK
+        run: |
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt 2>/dev/null | tail -1)
+          if [ -n "$AAPT" ]; then
+            "$AAPT" dump badging MasterX-Admin.apk | grep -E "^package:|application-label:"
+            "$AAPT" dump badging MasterX-Admin.apk | grep -q "name='com.masterx.admin'"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: MasterX-Admin-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: MasterX-Admin.apk
+          if-no-files-found: error
